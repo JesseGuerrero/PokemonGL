@@ -2,228 +2,110 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>WebGL Full Viewport</title>
+    <title>WebGL Grid</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/render.css') }}">
 </head>
 <body>
-    <canvas id="webgl-canvas"></canvas>
-
+    <canvas id="canvas"></canvas>
     <script>
-        // Get the canvas element
-        const canvas = document.getElementById('webgl-canvas');
+        const canvas = document.getElementById('canvas');
+        const gl = canvas.getContext('webgl');
 
-        // Get WebGL context
-        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        if (!gl) throw new Error('WebGL not supported');
 
-        if (!gl) {
-            alert('WebGL not supported in this browser');
-            throw new Error('WebGL not supported');
+        // Inline shaders
+        const vertexShader = `
+            attribute vec2 a_position;
+            uniform vec2 u_resolution;
+            void main() {
+                vec2 clipSpace = ((a_position / u_resolution) * 2.0) - 1.0;
+                gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+            }`;
+
+        const fragmentShader = `
+            precision mediump float;
+            uniform vec4 u_color;
+            void main() { gl_FragColor = u_color; }`;
+
+        // Create shader program
+        function createShader(type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                throw new Error(gl.getShaderInfoLog(shader));
+            }
+            return shader;
         }
 
-        // Grid configuration
-        const GRID_SIZE_INCHES = 0.75; // 3/4 inch per grid cell
-        let gridSizePixels = 0;
-        let gridCountX = 0;
-        let gridCountY = 0;
+        const program = gl.createProgram();
+        gl.attachShader(program, createShader(gl.VERTEX_SHADER, vertexShader));
+        gl.attachShader(program, createShader(gl.FRAGMENT_SHADER, fragmentShader));
+        gl.linkProgram(program);
 
-        // Function to calculate DPI
-        function calculateDPI() {
-            // Create a temporary element to measure DPI
-            const testDiv = document.createElement('div');
-            testDiv.style.width = '1in';
-            testDiv.style.height = '1in';
-            testDiv.style.position = 'absolute';
-            testDiv.style.left = '-100%';
-            testDiv.style.top = '-100%';
-            document.body.appendChild(testDiv);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            throw new Error(gl.getProgramInfoLog(program));
+        }
 
-            const dpi = testDiv.offsetWidth;
-            document.body.removeChild(testDiv);
+        // Get locations
+        const positionLocation = gl.getAttribLocation(program, 'a_position');
+        const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
+        const colorLocation = gl.getUniformLocation(program, 'u_color');
+        const positionBuffer = gl.createBuffer();
 
+        // Calculate DPI and grid
+        function getDPI() {
+            const div = document.createElement('div');
+            div.style.width = '1in';
+            div.style.position = 'absolute';
+            div.style.left = '-100%';
+            document.body.appendChild(div);
+            const dpi = div.offsetWidth;
+            document.body.removeChild(div);
             return dpi;
         }
 
-        // Function to resize canvas and recalculate grid
-        function resizeCanvas() {
+        function draw() {
+            // Resize canvas
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
             gl.viewport(0, 0, canvas.width, canvas.height);
 
-            // Calculate grid size in pixels based on DPI
-            const dpi = calculateDPI();
-            gridSizePixels = GRID_SIZE_INCHES * dpi;
+            // Calculate grid
+            const gridSize = 0.75 * getDPI(); // 3/4 inch
+            const gridX = Math.floor(canvas.width / gridSize);
+            const gridY = Math.floor(canvas.height / gridSize);
 
-            // Calculate how many grid cells fit in each dimension
-            gridCountX = Math.floor(canvas.width / gridSizePixels);
-            gridCountY = Math.floor(canvas.height / gridSizePixels);
-
-            console.log('DPI:', dpi);
-            console.log('Grid size (pixels):', gridSizePixels);
-            console.log('Grid count:', gridCountX, 'x', gridCountY);
-        }
-
-        // Function to load shader source from file
-        async function loadShaderSource(url) {
-            try {
-                const response = await fetch(url);
-                if (!response.ok) {
-                    throw new Error(`Failed to load shader: ${response.status}`);
-                }
-                return await response.text();
-            } catch (error) {
-                console.error('Error loading shader:', error);
-                throw error;
-            }
-        }
-
-        // Function to create shader
-        function createShader(gl, type, source) {
-            const shader = gl.createShader(type);
-            gl.shaderSource(shader, source);
-            gl.compileShader(shader);
-
-            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-                console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
-                gl.deleteShader(shader);
-                return null;
-            }
-
-            return shader;
-        }
-
-        // Function to create program
-        function createProgram(gl, vertexShader, fragmentShader) {
-            const program = gl.createProgram();
-            gl.attachShader(program, vertexShader);
-            gl.attachShader(program, fragmentShader);
-            gl.linkProgram(program);
-
-            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-                console.error('Program linking error:', gl.getProgramInfoLog(program));
-                gl.deleteProgram(program);
-                return null;
-            }
-
-            return program;
-        }
-
-        // Initialize shaders and program
-        let program;
-        async function initShaders() {
-            try {
-                // Load shader sources
-                const vertexShaderSource = await loadShaderSource('{{ url_for("static", filename="shaders/vertex.glsl") }}');
-                const fragmentShaderSource = await loadShaderSource('{{ url_for("static", filename="shaders/fragment.glsl") }}');
-
-                // Create shaders and program
-                const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
-                const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
-                program = createProgram(gl, vertexShader, fragmentShader);
-
-                if (!program) {
-                    throw new Error('Failed to create shader program');
-                }
-
-                console.log('Shaders loaded successfully');
-            } catch (error) {
-                console.error('Failed to initialize shaders:', error);
-                throw error;
-            }
-        }
-
-        // Get attribute and uniform locations
-        const positionLocation = gl.getAttribLocation(program, 'a_position');
-        const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
-        const colorLocation = gl.getUniformLocation(program, 'u_color');
-
-        // Create buffer for line positions
-        const positionBuffer = gl.createBuffer();
-
-        // Function to generate grid lines
-        function generateGridLines() {
+            // Generate grid lines
             const lines = [];
-
-            // Vertical lines
-            for (let i = 0; i <= gridCountX; i++) {
-                const x = i * gridSizePixels;
+            for (let i = 0; i <= gridX; i++) {
+                const x = i * gridSize;
                 lines.push(x, 0, x, canvas.height);
             }
-
-            // Horizontal lines
-            for (let i = 0; i <= gridCountY; i++) {
-                const y = i * gridSizePixels;
+            for (let i = 0; i <= gridY; i++) {
+                const y = i * gridSize;
                 lines.push(0, y, canvas.width, y);
             }
 
-            return new Float32Array(lines);
-        }
-
-        // Function to draw grid
-        function drawGrid() {
-            // Clear canvas
-            gl.clearColor(0.0, 0.1, 0.2, 1.0);
+            // Draw
+            gl.clearColor(0, 0.1, 0.2, 1);
             gl.clear(gl.COLOR_BUFFER_BIT);
-
-            // Use our shader program
             gl.useProgram(program);
-
-            // Set resolution uniform
             gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+            gl.uniform4f(colorLocation, 0.3, 0.3, 0.3, 1);
 
-            // Set grid color (light gray)
-            gl.uniform4f(colorLocation, 0.3, 0.3, 0.3, 1.0);
-
-            // Generate and bind grid lines
-            const gridLines = generateGridLines();
             gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-            gl.bufferData(gl.ARRAY_BUFFER, gridLines, gl.STATIC_DRAW);
-
-            // Enable position attribute
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.STATIC_DRAW);
             gl.enableVertexAttribArray(positionLocation);
             gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
-
-            // Draw all lines
-            gl.drawArrays(gl.LINES, 0, gridLines.length / 2);
+            gl.drawArrays(gl.LINES, 0, lines.length / 2);
         }
 
-        // Initialize everything
-        async function init() {
-            try {
-                // Initial setup
-                resizeCanvas();
+        // Start
+        draw();
+        window.addEventListener('resize', draw);
 
-                // Load shaders
-                await initShaders();
-
-                // Handle window resize
-                window.addEventListener('resize', () => {
-                    resizeCanvas();
-                    drawGrid();
-                });
-
-                // Start rendering
-                render();
-            } catch (error) {
-                console.error('Initialization failed:', error);
-                alert('Failed to initialize WebGL application. Check console for details.');
-            }
-        }
-
-        // Render loop
-        function render() {
-            if (program) {
-                drawGrid();
-            }
-            requestAnimationFrame(render);
-        }
-
-        // Start the application
-        init();
-
-        // Log WebGL info for debugging
-        console.log('WebGL Version:', gl.getParameter(gl.VERSION));
-        console.log('WebGL Vendor:', gl.getParameter(gl.VENDOR));
-        console.log('WebGL Renderer:', gl.getParameter(gl.RENDERER));
+        console.log('WebGL initialized successfully');
     </script>
 </body>
 </html>
