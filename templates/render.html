@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>WebGL Full Viewport</title>
-    <style src="css/render.css"></style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/render.css') }}">
 </head>
 <body>
     <canvas id="webgl-canvas"></canvas>
@@ -62,27 +62,19 @@
             console.log('Grid count:', gridCountX, 'x', gridCountY);
         }
 
-        // Vertex shader source
-        const vertexShaderSource = `
-            attribute vec2 a_position;
-            uniform vec2 u_resolution;
-
-            void main() {
-                // Convert from pixels to clip space
-                vec2 clipSpace = ((a_position / u_resolution) * 2.0) - 1.0;
-                gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+        // Function to load shader source from file
+        async function loadShaderSource(url) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`Failed to load shader: ${response.status}`);
+                }
+                return await response.text();
+            } catch (error) {
+                console.error('Error loading shader:', error);
+                throw error;
             }
-        `;
-
-        // Fragment shader source
-        const fragmentShaderSource = `
-            precision mediump float;
-            uniform vec4 u_color;
-
-            void main() {
-                gl_FragColor = u_color;
-            }
-        `;
+        }
 
         // Function to create shader
         function createShader(gl, type, source) {
@@ -115,10 +107,29 @@
             return program;
         }
 
-        // Create shaders and program
-        const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
-        const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
-        const program = createProgram(gl, vertexShader, fragmentShader);
+        // Initialize shaders and program
+        let program;
+        async function initShaders() {
+            try {
+                // Load shader sources
+                const vertexShaderSource = await loadShaderSource('{{ url_for("static", filename="shaders/vertex.glsl") }}');
+                const fragmentShaderSource = await loadShaderSource('{{ url_for("static", filename="shaders/fragment.glsl") }}');
+
+                // Create shaders and program
+                const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+                const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+                program = createProgram(gl, vertexShader, fragmentShader);
+
+                if (!program) {
+                    throw new Error('Failed to create shader program');
+                }
+
+                console.log('Shaders loaded successfully');
+            } catch (error) {
+                console.error('Failed to initialize shaders:', error);
+                throw error;
+            }
+        }
 
         // Get attribute and uniform locations
         const positionLocation = gl.getAttribLocation(program, 'a_position');
@@ -175,23 +186,39 @@
             gl.drawArrays(gl.LINES, 0, gridLines.length / 2);
         }
 
-        // Initial setup
-        resizeCanvas();
+        // Initialize everything
+        async function init() {
+            try {
+                // Initial setup
+                resizeCanvas();
 
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            resizeCanvas();
-            drawGrid();
-        });
+                // Load shaders
+                await initShaders();
+
+                // Handle window resize
+                window.addEventListener('resize', () => {
+                    resizeCanvas();
+                    drawGrid();
+                });
+
+                // Start rendering
+                render();
+            } catch (error) {
+                console.error('Initialization failed:', error);
+                alert('Failed to initialize WebGL application. Check console for details.');
+            }
+        }
 
         // Render loop
         function render() {
-            drawGrid();
+            if (program) {
+                drawGrid();
+            }
             requestAnimationFrame(render);
         }
 
-        // Start rendering
-        render();
+        // Start the application
+        init();
 
         // Log WebGL info for debugging
         console.log('WebGL Version:', gl.getParameter(gl.VERSION));
