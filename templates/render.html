@@ -2,23 +2,92 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>WebGL Grid</title>
+    <title>WebGL Grid with Boulder</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/render.css') }}">
 </head>
 <body>
     <canvas id="canvas"></canvas>
     <script src="{{ url_for('static', filename='js/shader.js') }}"></script>
     <script>
+        // Add texture vertex shader
+        const textureVertexShader = `
+            attribute vec2 a_position;
+            attribute vec2 a_texCoord;
+            uniform vec2 u_resolution;
+            uniform vec2 u_translation;
+            uniform vec2 u_scale;
+            varying vec2 v_texCoord;
+
+            void main() {
+                // Apply scale and translation
+                vec2 position = (a_position * u_scale) + u_translation;
+
+                // Convert from pixels to clip space
+                vec2 clipSpace = ((position / u_resolution) * 2.0) - 1.0;
+                gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+
+                // Pass texture coordinate to fragment shader
+                v_texCoord = a_texCoord;
+            }
+        `;
+
+        // Add texture fragment shader
+        const textureFragmentShader = `
+            precision mediump float;
+            uniform sampler2D u_image;
+            varying vec2 v_texCoord;
+
+            void main() {
+                gl_FragColor = texture2D(u_image, v_texCoord);
+            }
+        `;
+
+        async function loadBoulderImage() {
+            try {
+                const response = await fetch('/api/boulder-image');
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+
+                return {
+                    src: data.image_data,
+                    width: data.width,
+                    height: data.height
+                };
+            } catch (error) {
+                console.error('Failed to load boulder image:', error);
+                return null;
+            }
+        }
+
+        function createTexture(gl, image) {
+            const texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+
+            // Set parameters for texture
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+            // Upload image to texture
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+
+            return texture;
+        }
+
         async function initWebGL() {
             const canvas = document.getElementById('canvas');
             const gl = canvas.getContext('webgl');
 
             if (!gl) throw new Error('WebGL not supported');
 
-            // Load shaders from files
+            // Load shaders from files for grid
             const shaders = await loadShadersFromFiles(['vertex.glsl', 'fragment.glsl']);
 
-            // Create shader program
+            // Create shader program for grid
             function createShader(type, source) {
                 const shader = gl.createShader(type);
                 gl.shaderSource(shader, source);
@@ -29,20 +98,84 @@
                 return shader;
             }
 
-            const program = gl.createProgram();
-            gl.attachShader(program, createShader(gl.VERTEX_SHADER, shaders.vertex));
-            gl.attachShader(program, createShader(gl.FRAGMENT_SHADER, shaders.fragment));
-            gl.linkProgram(program);
+            // Grid program
+            const gridProgram = gl.createProgram();
+            gl.attachShader(gridProgram, createShader(gl.VERTEX_SHADER, shaders.vertex));
+            gl.attachShader(gridProgram, createShader(gl.FRAGMENT_SHADER, shaders.fragment));
+            gl.linkProgram(gridProgram);
 
-            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-                throw new Error(gl.getProgramInfoLog(program));
+            if (!gl.getProgramParameter(gridProgram, gl.LINK_STATUS)) {
+                throw new Error(gl.getProgramInfoLog(gridProgram));
             }
 
-            // Get locations
-            const positionLocation = gl.getAttribLocation(program, 'a_position');
-            const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
-            const colorLocation = gl.getUniformLocation(program, 'u_color');
-            const positionBuffer = gl.createBuffer();
+            // Texture program
+            const textureProgram = gl.createProgram();
+            gl.attachShader(textureProgram, createShader(gl.VERTEX_SHADER, textureVertexShader));
+            gl.attachShader(textureProgram, createShader(gl.FRAGMENT_SHADER, textureFragmentShader));
+            gl.linkProgram(textureProgram);
+
+            if (!gl.getProgramParameter(textureProgram, gl.LINK_STATUS)) {
+                throw new Error(gl.getProgramInfoLog(textureProgram));
+            }
+
+            // Get locations for grid
+            const gridPositionLocation = gl.getAttribLocation(gridProgram, 'a_position');
+            const gridResolutionLocation = gl.getUniformLocation(gridProgram, 'u_resolution');
+            const gridColorLocation = gl.getUniformLocation(gridProgram, 'u_color');
+            const gridPositionBuffer = gl.createBuffer();
+
+            // Get locations for texture
+            const texPositionLocation = gl.getAttribLocation(textureProgram, 'a_position');
+            const texCoordLocation = gl.getAttribLocation(textureProgram, 'a_texCoord');
+            const texResolutionLocation = gl.getUniformLocation(textureProgram, 'u_resolution');
+            const texTranslationLocation = gl.getUniformLocation(textureProgram, 'u_translation');
+            const texScaleLocation = gl.getUniformLocation(textureProgram, 'u_scale');
+            const texImageLocation = gl.getUniformLocation(textureProgram, 'u_image');
+
+            // Create buffers for texture rendering
+            const texPositionBuffer = gl.createBuffer();
+            const texCoordBuffer = gl.createBuffer();
+
+            // Rectangle vertices (for the boulder)
+            const rectangleVertices = [
+                0, 0,
+                1, 0,
+                0, 1,
+                0, 1,
+                1, 0,
+                1, 1
+            ];
+
+            // Texture coordinates
+            const texCoords = [
+                0, 0,
+                1, 0,
+                0, 1,
+                0, 1,
+                1, 0,
+                1, 1
+            ];
+
+            // Set up rectangle vertices
+            gl.bindBuffer(gl.ARRAY_BUFFER, texPositionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(rectangleVertices), gl.STATIC_DRAW);
+
+            // Set up texture coordinates
+            gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texCoords), gl.STATIC_DRAW);
+
+            // Load boulder image
+            const boulderData = await loadBoulderImage();
+            let boulderTexture = null;
+
+            if (boulderData) {
+                const img = new Image();
+                img.onload = function() {
+                    boulderTexture = createTexture(gl, img);
+                    draw(); // Redraw once image is loaded
+                };
+                img.src = boulderData.src;
+            }
 
             // Calculate DPI and grid
             function getDPI() {
@@ -62,7 +195,11 @@
                 canvas.height = window.innerHeight;
                 gl.viewport(0, 0, canvas.width, canvas.height);
 
-                // Calculate grid
+                // Clear canvas
+                gl.clearColor(0, 0.1, 0.2, 1);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+
+                // Draw grid
                 const gridSize = 0.75 * getDPI(); // 3/4 inch
                 const gridX = Math.floor(canvas.width / gridSize);
                 const gridY = Math.floor(canvas.height / gridSize);
@@ -78,18 +215,57 @@
                     lines.push(0, y, canvas.width, y);
                 }
 
-                // Draw
-                gl.clearColor(0, 0.1, 0.2, 1);
-                gl.clear(gl.COLOR_BUFFER_BIT);
-                gl.useProgram(program);
-                gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
-                gl.uniform4f(colorLocation, 0.3, 0.3, 0.3, 1);
+                // Render grid
+                gl.useProgram(gridProgram);
+                gl.uniform2f(gridResolutionLocation, canvas.width, canvas.height);
+                gl.uniform4f(gridColorLocation, 0.3, 0.3, 0.3, 1);
 
-                gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+                gl.bindBuffer(gl.ARRAY_BUFFER, gridPositionBuffer);
                 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.STATIC_DRAW);
-                gl.enableVertexAttribArray(positionLocation);
-                gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(gridPositionLocation);
+                gl.vertexAttribPointer(gridPositionLocation, 2, gl.FLOAT, false, 0, 0);
                 gl.drawArrays(gl.LINES, 0, lines.length / 2);
+
+                // Draw boulder if texture is loaded
+                if (boulderTexture && boulderData) {
+                    gl.useProgram(textureProgram);
+
+                    // Enable blending for transparency
+                    gl.enable(gl.BLEND);
+                    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+                    // Set uniforms
+                    gl.uniform2f(texResolutionLocation, canvas.width, canvas.height);
+
+                    // Center the boulder
+                    const boulderSize = 128; // Size in pixels
+                    const centerX = canvas.width / 2 - boulderSize / 2;
+                    const centerY = canvas.height / 2 - boulderSize / 2;
+
+                    gl.uniform2f(texTranslationLocation, centerX, centerY);
+                    gl.uniform2f(texScaleLocation, boulderSize, boulderSize);
+
+                    // Bind texture
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, boulderTexture);
+                    gl.uniform1i(texImageLocation, 0);
+
+                    // Set position attribute
+                    gl.bindBuffer(gl.ARRAY_BUFFER, texPositionBuffer);
+                    gl.enableVertexAttribArray(texPositionLocation);
+                    gl.vertexAttribPointer(texPositionLocation, 2, gl.FLOAT, false, 0, 0);
+
+                    // Set texture coordinate attribute
+                    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+                    gl.enableVertexAttribArray(texCoordLocation);
+                    gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
+
+                    // Draw the boulder
+                    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+                    // Disable blending
+                    gl.disable(gl.BLEND);
+                }
             }
 
             // Start
