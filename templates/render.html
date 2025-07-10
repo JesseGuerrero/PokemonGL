@@ -3,13 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <title>WebGL Grid with Boulder</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/render.css') }}">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        #canvas {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+            background-color: #000;
+        }
+    </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
-    <script src="{{ url_for('static', filename='js/shader.js') }}"></script>
     <script>
-        // Add texture vertex shader
+        // Texture vertex shader
         const textureVertexShader = `
             attribute vec2 a_position;
             attribute vec2 a_texCoord;
@@ -19,26 +37,51 @@
             varying vec2 v_texCoord;
 
             void main() {
-                // Apply scale and translation
                 vec2 position = (a_position * u_scale) + u_translation;
-
-                // Convert from pixels to clip space
                 vec2 clipSpace = ((position / u_resolution) * 2.0) - 1.0;
                 gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
-
-                // Pass texture coordinate to fragment shader
                 v_texCoord = a_texCoord;
             }
         `;
 
-        // Add texture fragment shader
+        // Modified fragment shader for sprite sheet tile extraction
         const textureFragmentShader = `
             precision mediump float;
             uniform sampler2D u_image;
+            uniform vec2 u_tileSize;
+            uniform vec2 u_tileIndex;
+            uniform vec2 u_imageSize;
             varying vec2 v_texCoord;
 
             void main() {
-                gl_FragColor = texture2D(u_image, v_texCoord);
+                // Calculate the UV coordinates for the specific tile
+                vec2 tileUV = (u_tileIndex * u_tileSize) / u_imageSize;
+                vec2 tileSizeUV = u_tileSize / u_imageSize;
+
+                // Map the texture coordinate to the specific tile
+                vec2 finalUV = tileUV + (v_texCoord * tileSizeUV);
+
+                gl_FragColor = texture2D(u_image, finalUV);
+            }
+        `;
+
+        // Grid shaders
+        const gridVertexShader = `
+            attribute vec2 a_position;
+            uniform vec2 u_resolution;
+
+            void main() {
+                vec2 clipSpace = ((a_position / u_resolution) * 2.0) - 1.0;
+                gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+            }
+        `;
+
+        const gridFragmentShader = `
+            precision mediump float;
+            uniform vec4 u_color;
+
+            void main() {
+                gl_FragColor = u_color;
             }
         `;
 
@@ -66,13 +109,11 @@
             const texture = gl.createTexture();
             gl.bindTexture(gl.TEXTURE_2D, texture);
 
-            // Set parameters for texture
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
-            // Upload image to texture
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
 
             return texture;
@@ -84,10 +125,6 @@
 
             if (!gl) throw new Error('WebGL not supported');
 
-            // Load shaders from files for grid
-            const shaders = await loadShadersFromFiles(['vertex.glsl', 'fragment.glsl']);
-
-            // Create shader program for grid
             function createShader(type, source) {
                 const shader = gl.createShader(type);
                 gl.shaderSource(shader, source);
@@ -100,23 +137,15 @@
 
             // Grid program
             const gridProgram = gl.createProgram();
-            gl.attachShader(gridProgram, createShader(gl.VERTEX_SHADER, shaders.vertex));
-            gl.attachShader(gridProgram, createShader(gl.FRAGMENT_SHADER, shaders.fragment));
+            gl.attachShader(gridProgram, createShader(gl.VERTEX_SHADER, gridVertexShader));
+            gl.attachShader(gridProgram, createShader(gl.FRAGMENT_SHADER, gridFragmentShader));
             gl.linkProgram(gridProgram);
-
-            if (!gl.getProgramParameter(gridProgram, gl.LINK_STATUS)) {
-                throw new Error(gl.getProgramInfoLog(gridProgram));
-            }
 
             // Texture program
             const textureProgram = gl.createProgram();
             gl.attachShader(textureProgram, createShader(gl.VERTEX_SHADER, textureVertexShader));
             gl.attachShader(textureProgram, createShader(gl.FRAGMENT_SHADER, textureFragmentShader));
             gl.linkProgram(textureProgram);
-
-            if (!gl.getProgramParameter(textureProgram, gl.LINK_STATUS)) {
-                throw new Error(gl.getProgramInfoLog(textureProgram));
-            }
 
             // Get locations for grid
             const gridPositionLocation = gl.getAttribLocation(gridProgram, 'a_position');
@@ -131,12 +160,15 @@
             const texTranslationLocation = gl.getUniformLocation(textureProgram, 'u_translation');
             const texScaleLocation = gl.getUniformLocation(textureProgram, 'u_scale');
             const texImageLocation = gl.getUniformLocation(textureProgram, 'u_image');
+            const texTileSizeLocation = gl.getUniformLocation(textureProgram, 'u_tileSize');
+            const texTileIndexLocation = gl.getUniformLocation(textureProgram, 'u_tileIndex');
+            const texImageSizeLocation = gl.getUniformLocation(textureProgram, 'u_imageSize');
 
             // Create buffers for texture rendering
             const texPositionBuffer = gl.createBuffer();
             const texCoordBuffer = gl.createBuffer();
 
-            // Rectangle vertices (for the boulder)
+            // Rectangle vertices
             const rectangleVertices = [
                 0, 0,
                 1, 0,
@@ -156,11 +188,9 @@
                 1, 1
             ];
 
-            // Set up rectangle vertices
             gl.bindBuffer(gl.ARRAY_BUFFER, texPositionBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(rectangleVertices), gl.STATIC_DRAW);
 
-            // Set up texture coordinates
             gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texCoords), gl.STATIC_DRAW);
 
@@ -172,12 +202,11 @@
                 const img = new Image();
                 img.onload = function() {
                     boulderTexture = createTexture(gl, img);
-                    draw(); // Redraw once image is loaded
+                    draw();
                 };
                 img.src = boulderData.src;
             }
 
-            // Calculate DPI and grid
             function getDPI() {
                 const div = document.createElement('div');
                 div.style.width = '1in';
@@ -190,21 +219,18 @@
             }
 
             function draw() {
-                // Resize canvas
                 canvas.width = window.innerWidth;
                 canvas.height = window.innerHeight;
                 gl.viewport(0, 0, canvas.width, canvas.height);
 
-                // Clear canvas
                 gl.clearColor(0, 0.1, 0.2, 1);
                 gl.clear(gl.COLOR_BUFFER_BIT);
 
                 // Draw grid
-                const gridSize = 0.75 * getDPI(); // 3/4 inch
+                const gridSize = 0.75 * getDPI();
                 const gridX = Math.floor(canvas.width / gridSize);
                 const gridY = Math.floor(canvas.height / gridSize);
 
-                // Generate grid lines
                 const lines = [];
                 for (let i = 0; i <= gridX; i++) {
                     const x = i * gridSize;
@@ -215,7 +241,6 @@
                     lines.push(0, y, canvas.width, y);
                 }
 
-                // Render grid
                 gl.useProgram(gridProgram);
                 gl.uniform2f(gridResolutionLocation, canvas.width, canvas.height);
                 gl.uniform4f(gridColorLocation, 0.3, 0.3, 0.3, 1);
@@ -226,56 +251,59 @@
                 gl.vertexAttribPointer(gridPositionLocation, 2, gl.FLOAT, false, 0, 0);
                 gl.drawArrays(gl.LINES, 0, lines.length / 2);
 
-                // Draw boulder if texture is loaded
+                // Draw boulder tile if texture is loaded
                 if (boulderTexture && boulderData) {
                     gl.useProgram(textureProgram);
 
-                    // Enable blending for transparency
                     gl.enable(gl.BLEND);
                     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-                    // Set uniforms
                     gl.uniform2f(texResolutionLocation, canvas.width, canvas.height);
 
-                    // Center the boulder
-                    const boulderSize = 128; // Size in pixels
-                    const centerX = canvas.width / 2 - boulderSize / 2;
-                    const centerY = canvas.height / 2 - boulderSize / 2;
+                    // Position in the center grid cell
+                    const centerGridX = Math.floor(gridX / 2);
+                    const centerGridY = Math.floor(gridY / 2);
+                    const tileX = centerGridX * gridSize;
+                    const tileY = centerGridY * gridSize;
 
-                    gl.uniform2f(texTranslationLocation, centerX, centerY);
-                    gl.uniform2f(texScaleLocation, boulderSize, boulderSize);
+                    gl.uniform2f(texTranslationLocation, tileX, tileY);
+                    gl.uniform2f(texScaleLocation, gridSize, gridSize);
+
+                    // Sprite sheet parameters (assuming 16x16 tiles in a 4x4 grid)
+                    const tileSize = 32; // Size of each tile in pixels
+                    const tileColumn = 0; // Column 0
+                    const tileRow = 0;    // Row 0
+
+                    gl.uniform2f(texTileSizeLocation, tileSize, tileSize);
+                    gl.uniform2f(texTileIndexLocation, tileColumn, tileRow);
+                    gl.uniform2f(texImageSizeLocation, boulderData.width, boulderData.height);
 
                     // Bind texture
                     gl.activeTexture(gl.TEXTURE0);
                     gl.bindTexture(gl.TEXTURE_2D, boulderTexture);
                     gl.uniform1i(texImageLocation, 0);
 
-                    // Set position attribute
+                    // Set attributes
                     gl.bindBuffer(gl.ARRAY_BUFFER, texPositionBuffer);
                     gl.enableVertexAttribArray(texPositionLocation);
                     gl.vertexAttribPointer(texPositionLocation, 2, gl.FLOAT, false, 0, 0);
 
-                    // Set texture coordinate attribute
                     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
                     gl.enableVertexAttribArray(texCoordLocation);
                     gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
 
-                    // Draw the boulder
                     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-                    // Disable blending
                     gl.disable(gl.BLEND);
                 }
             }
 
-            // Start
             draw();
             window.addEventListener('resize', draw);
 
             console.log('WebGL initialized successfully');
         }
 
-        // Initialize when page loads
         initWebGL().catch(error => {
             console.error('Failed to initialize WebGL:', error);
         });
