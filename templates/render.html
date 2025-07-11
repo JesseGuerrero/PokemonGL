@@ -2,21 +2,21 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>WebGL Grid with Boulder</title>
+    <title>WebGL Grid with Boulder Tile</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/render.css') }}">
 </head>
 <body>
     <canvas id="canvas"></canvas>
     <script src="{{ url_for('static', filename='js/shader.js') }}"></script>
     <script>
-        async function loadBoulderImage() {
+        async function loadTile(row, col) {
             try {
-                const response = await fetch('/api/boulder-image');
+                const response = await fetch(`/api/boulder-image/${row}/${col}`);
                 const data = await response.json();
                 if (!data.success) throw new Error(data.error);
                 return { src: data.image_data, width: data.width, height: data.height };
             } catch (error) {
-                console.error('Failed to load boulder image:', error);
+                console.error(`Failed to load tile ${row},${col}:`, error);
                 return null;
             }
         }
@@ -62,13 +62,12 @@
             gl.attachShader(textureProgram, createShader(gl.FRAGMENT_SHADER, shaders.textureFragment));
             gl.linkProgram(textureProgram);
 
-            // Get locations for grid
+            // Get locations
             const gridPositionLocation = gl.getAttribLocation(gridProgram, 'a_position');
             const gridResolutionLocation = gl.getUniformLocation(gridProgram, 'u_resolution');
             const gridColorLocation = gl.getUniformLocation(gridProgram, 'u_color');
             const gridPositionBuffer = gl.createBuffer();
 
-            // Get locations for texture
             const texPositionLocation = gl.getAttribLocation(textureProgram, 'a_position');
             const texCoordLocation = gl.getAttribLocation(textureProgram, 'a_texCoord');
             const texResolutionLocation = gl.getUniformLocation(textureProgram, 'u_resolution');
@@ -79,7 +78,7 @@
             const texTileIndexLocation = gl.getUniformLocation(textureProgram, 'u_tileIndex');
             const texImageSizeLocation = gl.getUniformLocation(textureProgram, 'u_imageSize');
 
-            // Create buffers for texture rendering
+            // Create buffers
             const texPositionBuffer = gl.createBuffer();
             const texCoordBuffer = gl.createBuffer();
 
@@ -93,17 +92,24 @@
             gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texCoords), gl.STATIC_DRAW);
 
-            // Load boulder image
-            const boulderData = await loadBoulderImage();
-            let boulderTexture = null;
+            // Load tile (1,1) which corresponds to row 0, col 0 in the tileset
+            const tileData = await loadTile(2, 2);
+            let tileTexture = null;
 
-            if (boulderData) {
+            if (tileData) {
+                console.log('Tile data loaded:', tileData.width, 'x', tileData.height);
                 const img = new Image();
                 img.onload = function() {
-                    boulderTexture = createTexture(gl, img);
+                    console.log('Image loaded, creating texture');
+                    tileTexture = createTexture(gl, img);
                     draw();
                 };
-                img.src = boulderData.src;
+                img.onerror = function() {
+                    console.error('Failed to load image');
+                };
+                img.src = tileData.src;
+            } else {
+                console.error('No tile data received');
             }
 
             function getDPI() {
@@ -150,16 +156,16 @@
                 gl.vertexAttribPointer(gridPositionLocation, 2, gl.FLOAT, false, 0, 0);
                 gl.drawArrays(gl.LINES, 0, lines.length / 2);
 
-                // Draw boulder tile if texture is loaded
-                if (boulderTexture && boulderData) {
+                // Draw tile at center grid cell
+                if (tileTexture && tileData) {
+                    console.log('Drawing texture');
                     gl.useProgram(textureProgram);
-
                     gl.enable(gl.BLEND);
                     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
                     gl.uniform2f(texResolutionLocation, canvas.width, canvas.height);
 
-                    // Position in the center grid cell
+                    // Center grid cell position
                     const centerGridX = Math.floor(gridX / 2);
                     const centerGridY = Math.floor(gridY / 2);
                     const tileX = centerGridX * gridSize;
@@ -168,15 +174,14 @@
                     gl.uniform2f(texTranslationLocation, tileX, tileY);
                     gl.uniform2f(texScaleLocation, gridSize, gridSize);
 
-                    // Sprite sheet parameters (assuming 32x32 tiles)
-                    const tileSize = 32;
-                    gl.uniform2f(texTileSizeLocation, tileSize, tileSize);
+                    // Since we're loading individual tiles, we use the full texture
+                    gl.uniform2f(texTileSizeLocation, tileData.width, tileData.height);
                     gl.uniform2f(texTileIndexLocation, 0, 0);
-                    gl.uniform2f(texImageSizeLocation, boulderData.width, boulderData.height);
+                    gl.uniform2f(texImageSizeLocation, tileData.width, tileData.height);
 
                     // Bind texture
                     gl.activeTexture(gl.TEXTURE0);
-                    gl.bindTexture(gl.TEXTURE_2D, boulderTexture);
+                    gl.bindTexture(gl.TEXTURE_2D, tileTexture);
                     gl.uniform1i(texImageLocation, 0);
 
                     // Set attributes
@@ -189,14 +194,12 @@
                     gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
 
                     gl.drawArrays(gl.TRIANGLES, 0, 6);
-
                     gl.disable(gl.BLEND);
                 }
             }
 
             draw();
             window.addEventListener('resize', draw);
-            console.log('WebGL initialized successfully');
         }
 
         initWebGL().catch(error => {
