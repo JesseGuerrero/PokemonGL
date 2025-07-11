@@ -7,23 +7,14 @@
 </head>
 <body>
     <canvas id="canvas"></canvas>
+    <script src="{{ url_for('static', filename='js/shader.js') }}"></script>
     <script>
-        const shaders = await loadShadersFromFiles(['vertex.glsl', 'fragment.glsl', 'textureVertex.glsl', 'textureFragment.glsl']);
-
         async function loadBoulderImage() {
             try {
                 const response = await fetch('/api/boulder-image');
                 const data = await response.json();
-
-                if (!data.success) {
-                    throw new Error(data.error);
-                }
-
-                return {
-                    src: data.image_data,
-                    width: data.width,
-                    height: data.height
-                };
+                if (!data.success) throw new Error(data.error);
+                return { src: data.image_data, width: data.width, height: data.height };
             } catch (error) {
                 console.error('Failed to load boulder image:', error);
                 return null;
@@ -33,22 +24,21 @@
         function createTexture(gl, image) {
             const texture = gl.createTexture();
             gl.bindTexture(gl.TEXTURE_2D, texture);
-
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-
             return texture;
         }
 
         async function initWebGL() {
             const canvas = document.getElementById('canvas');
             const gl = canvas.getContext('webgl');
-
             if (!gl) throw new Error('WebGL not supported');
+
+            // Load shaders
+            const shaders = await loadShadersFromFiles(['vertex.glsl', 'fragment.glsl', 'textureVertex.glsl', 'textureFragment.glsl']);
 
             function createShader(type, source) {
                 const shader = gl.createShader(type);
@@ -62,14 +52,14 @@
 
             // Grid program
             const gridProgram = gl.createProgram();
-            gl.attachShader(gridProgram, createShader(gl.VERTEX_SHADER, gridVertexShader));
-            gl.attachShader(gridProgram, createShader(gl.FRAGMENT_SHADER, gridFragmentShader));
+            gl.attachShader(gridProgram, createShader(gl.VERTEX_SHADER, shaders.vertex));
+            gl.attachShader(gridProgram, createShader(gl.FRAGMENT_SHADER, shaders.fragment));
             gl.linkProgram(gridProgram);
 
             // Texture program
             const textureProgram = gl.createProgram();
-            gl.attachShader(textureProgram, createShader(gl.VERTEX_SHADER, textureVertexShader));
-            gl.attachShader(textureProgram, createShader(gl.FRAGMENT_SHADER, textureFragmentShader));
+            gl.attachShader(textureProgram, createShader(gl.VERTEX_SHADER, shaders.textureVertex));
+            gl.attachShader(textureProgram, createShader(gl.FRAGMENT_SHADER, shaders.textureFragment));
             gl.linkProgram(textureProgram);
 
             // Get locations for grid
@@ -93,25 +83,9 @@
             const texPositionBuffer = gl.createBuffer();
             const texCoordBuffer = gl.createBuffer();
 
-            // Rectangle vertices
-            const rectangleVertices = [
-                0, 0,
-                1, 0,
-                0, 1,
-                0, 1,
-                1, 0,
-                1, 1
-            ];
-
-            // Texture coordinates
-            const texCoords = [
-                0, 0,
-                1, 0,
-                0, 1,
-                0, 1,
-                1, 0,
-                1, 1
-            ];
+            // Rectangle vertices and texture coordinates
+            const rectangleVertices = [0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1];
+            const texCoords = [0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1];
 
             gl.bindBuffer(gl.ARRAY_BUFFER, texPositionBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(rectangleVertices), gl.STATIC_DRAW);
@@ -194,13 +168,10 @@
                     gl.uniform2f(texTranslationLocation, tileX, tileY);
                     gl.uniform2f(texScaleLocation, gridSize, gridSize);
 
-                    // Sprite sheet parameters (assuming 16x16 tiles in a 4x4 grid)
-                    const tileSize = 32; // Size of each tile in pixels
-                    const tileColumn = 0; // Column 0
-                    const tileRow = 0;    // Row 0
-
+                    // Sprite sheet parameters (assuming 32x32 tiles)
+                    const tileSize = 32;
                     gl.uniform2f(texTileSizeLocation, tileSize, tileSize);
-                    gl.uniform2f(texTileIndexLocation, tileColumn, tileRow);
+                    gl.uniform2f(texTileIndexLocation, 0, 0);
                     gl.uniform2f(texImageSizeLocation, boulderData.width, boulderData.height);
 
                     // Bind texture
@@ -225,7 +196,6 @@
 
             draw();
             window.addEventListener('resize', draw);
-
             console.log('WebGL initialized successfully');
         }
 
