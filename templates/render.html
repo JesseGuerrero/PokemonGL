@@ -3,87 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <title>WebGL Grid with Boulder</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body, html {
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-        }
-
-        #canvas {
-            width: 100vw;
-            height: 100vh;
-            display: block;
-            background-color: #000;
-        }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/render.css') }}">
 </head>
 <body>
     <canvas id="canvas"></canvas>
     <script>
-        // Texture vertex shader
-        const textureVertexShader = `
-            attribute vec2 a_position;
-            attribute vec2 a_texCoord;
-            uniform vec2 u_resolution;
-            uniform vec2 u_translation;
-            uniform vec2 u_scale;
-            varying vec2 v_texCoord;
-
-            void main() {
-                vec2 position = (a_position * u_scale) + u_translation;
-                vec2 clipSpace = ((position / u_resolution) * 2.0) - 1.0;
-                gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
-                v_texCoord = a_texCoord;
-            }
-        `;
-
-        // Modified fragment shader for sprite sheet tile extraction
-        const textureFragmentShader = `
-            precision mediump float;
-            uniform sampler2D u_image;
-            uniform vec2 u_tileSize;
-            uniform vec2 u_tileIndex;
-            uniform vec2 u_imageSize;
-            varying vec2 v_texCoord;
-
-            void main() {
-                // Calculate the UV coordinates for the specific tile
-                vec2 tileUV = (u_tileIndex * u_tileSize) / u_imageSize;
-                vec2 tileSizeUV = u_tileSize / u_imageSize;
-
-                // Map the texture coordinate to the specific tile
-                vec2 finalUV = tileUV + (v_texCoord * tileSizeUV);
-
-                gl_FragColor = texture2D(u_image, finalUV);
-            }
-        `;
-
-        // Grid shaders
-        const gridVertexShader = `
-            attribute vec2 a_position;
-            uniform vec2 u_resolution;
-
-            void main() {
-                vec2 clipSpace = ((a_position / u_resolution) * 2.0) - 1.0;
-                gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
-            }
-        `;
-
-        const gridFragmentShader = `
-            precision mediump float;
-            uniform vec4 u_color;
-
-            void main() {
-                gl_FragColor = u_color;
-            }
-        `;
+        const shaders = await loadShadersFromFiles(['vertex.glsl', 'fragment.glsl', 'textureVertex.glsl', 'textureFragment.glsl']);
 
         async function loadBoulderImage() {
             try {
